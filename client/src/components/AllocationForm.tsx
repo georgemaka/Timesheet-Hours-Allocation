@@ -6,6 +6,9 @@ interface Job {
   erp_job_id: string;
   name: string;
   active_flag: boolean;
+  is_out_of_state: boolean;
+  home_state: string;
+  job_state: string;
 }
 
 interface Phase {
@@ -16,12 +19,29 @@ interface Phase {
   active_flag: boolean;
 }
 
+interface Equipment {
+  id: number;
+  equipment_id: string;
+  name: string;
+  active_flag: boolean;
+}
+
+interface CostCode {
+  id: number;
+  code: string;
+  name: string;
+  active_flag: boolean;
+}
+
 interface AllocationLine {
   id: string;
+  job_type: 'job' | 'mechanic';
   job_id: string;
   phase_id: string;
+  equipment_id: string;
+  cost_code_id: string;
   percentage: string;
-  is_pto: boolean;
+  work_location: 'onsite' | 'remote' | '';
 }
 
 interface Week {
@@ -34,9 +54,11 @@ interface Week {
 const AllocationForm: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [phases, setPhases] = useState<{ [key: string]: Phase[] }>({});
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [costCodes, setCostCodes] = useState<CostCode[]>([]);
   const [currentWeek, setCurrentWeek] = useState<Week | null>(null);
   const [allocations, setAllocations] = useState<AllocationLine[]>([
-    { id: '1', job_id: '', phase_id: '', percentage: '', is_pto: false }
+    { id: '1', job_type: 'job', job_id: '', phase_id: '', equipment_id: '', cost_code_id: '', percentage: '', work_location: '' }
   ]);
   const [totalPercentage, setTotalPercentage] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -54,7 +76,7 @@ const AllocationForm: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchJobs(), fetchCurrentWeek()]);
+      await Promise.all([fetchJobs(), fetchCurrentWeek(), fetchEquipment(), fetchCostCodes()]);
       setLoading(false);
     };
     loadData();
@@ -137,10 +159,13 @@ const AllocationForm: React.FC = () => {
     const newId = (allocations.length + 1).toString();
     setAllocations([...allocations, { 
       id: newId, 
+      job_type: 'job',
       job_id: '', 
       phase_id: '', 
+      equipment_id: '',
+      cost_code_id: '',
       percentage: '', 
-      is_pto: false 
+      work_location: '' 
     }]);
   };
 
@@ -163,10 +188,19 @@ const AllocationForm: React.FC = () => {
           }
         }
 
-        // If PTO is selected, clear job and phase
-        if (field === 'is_pto' && value === true) {
+        // Handle job type changes
+        if (field === 'job_type') {
           updated.job_id = '';
           updated.phase_id = '';
+          updated.equipment_id = '';
+          updated.cost_code_id = '';
+          updated.work_location = '';
+        }
+        
+        // If job changes, reset related fields
+        if (field === 'job_id' && typeof value === 'string' && value) {
+          const selectedJob = jobs.find(j => j.id.toString() === value);
+          updated.work_location = selectedJob?.is_out_of_state ? 'onsite' : '';
         }
 
         return updated;
@@ -243,6 +277,30 @@ const AllocationForm: React.FC = () => {
     }
   };
 
+  const fetchEquipment = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/equipment');
+      if (!response.ok) throw new Error('Failed to load equipment');
+      const data = await response.json();
+      setEquipment(data);
+    } catch (error) {
+      console.error('Error fetching equipment:', error);
+      setMessage({ type: 'error', text: 'Failed to load equipment data. Please refresh the page.' });
+    }
+  };
+
+  const fetchCostCodes = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/cost-codes');
+      if (!response.ok) throw new Error('Failed to load cost codes');
+      const data = await response.json();
+      setCostCodes(data);
+    } catch (error) {
+      console.error('Error fetching cost codes:', error);
+      setMessage({ type: 'error', text: 'Failed to load cost code data. Please refresh the page.' });
+    }
+  };
+
   const clearMessage = () => {
     setMessage(null);
   };
@@ -254,8 +312,8 @@ const AllocationForm: React.FC = () => {
       const data = await response.json();
       
       // Load phases for each job in previous allocation
-      const uniqueJobIds = [...new Set(data.allocations.map((a: AllocationLine) => a.job_id))];
-      await Promise.all(uniqueJobIds.map(jobId => fetchPhases(jobId)));
+      const uniqueJobIds = Array.from(new Set(data.allocations.map((a: AllocationLine) => a.job_id)));
+      await Promise.all(uniqueJobIds.map(jobId => fetchPhases(jobId as string)));
       
       setAllocations(data.allocations.map((allocation: AllocationLine, index: number) => ({
         ...allocation,
@@ -270,12 +328,16 @@ const AllocationForm: React.FC = () => {
   };
 
   const distributeEvenly = () => {
-    const nonEmptyLines = allocations.filter(a => (a.job_id && a.phase_id) || a.is_pto);
+    const nonEmptyLines = allocations.filter(a => 
+      (a.job_type === 'job' && a.job_id && a.phase_id) ||
+      (a.job_type === 'mechanic' && a.equipment_id && a.cost_code_id)
+    );
     if (nonEmptyLines.length === 0) return;
     
     const evenPercentage = (100 / nonEmptyLines.length).toFixed(2);
     const updatedAllocations = allocations.map(allocation => {
-      if ((allocation.job_id && allocation.phase_id) || allocation.is_pto) {
+      if ((allocation.job_type === 'job' && allocation.job_id && allocation.phase_id) ||
+          (allocation.job_type === 'mechanic' && allocation.equipment_id && allocation.cost_code_id)) {
         return { ...allocation, percentage: evenPercentage };
       }
       return allocation;
@@ -297,7 +359,11 @@ const AllocationForm: React.FC = () => {
     }
     
     const remaining = 100 - currentTotal;
-    const lastValidLine = allocations.findLast(a => (a.job_id && a.phase_id) || a.is_pto);
+    const lastValidLine = allocations.reverse().find(a => 
+      (a.job_type === 'job' && a.job_id && a.phase_id) ||
+      (a.job_type === 'mechanic' && a.equipment_id && a.cost_code_id)
+    ) || null;
+    allocations.reverse(); // restore original order
     
     if (!lastValidLine) {
       setMessage({ type: 'error', text: 'No valid allocation lines to fill.' });
@@ -337,10 +403,13 @@ const AllocationForm: React.FC = () => {
         
         newAllocations.push({
           id: startId.toString(),
+          job_type: 'job',
           job_id: job.id.toString(),
           phase_id: firstPhase ? firstPhase.id.toString() : '',
+          equipment_id: '',
+          cost_code_id: '',
           percentage: '',
-          is_pto: false
+          work_location: job.is_out_of_state ? 'onsite' : ''
         });
       }
     }
@@ -426,7 +495,10 @@ const AllocationForm: React.FC = () => {
           <button 
             className="distribute-btn"
             onClick={distributeEvenly}
-            disabled={allocations.filter(a => (a.job_id && a.phase_id) || a.is_pto).length === 0}
+            disabled={allocations.filter(a => 
+              (a.job_type === 'job' && a.job_id && a.phase_id) ||
+              (a.job_type === 'mechanic' && a.equipment_id && a.cost_code_id)
+            ).length === 0}
           >
   ⟺ Distribute Evenly
           </button>
@@ -525,45 +597,99 @@ const AllocationForm: React.FC = () => {
 
       <div className="allocation-table">
         <div className="table-header">
-          <div>▤ Job</div>
-          <div>▦ Phase</div>
+          <div>◆ Type</div>
+          <div>▤ Job/Equipment</div>
+          <div>▦ Phase/Cost Code</div>
           <div>▧ {inputMode === 'hours' ? 'Hours' : '% Allocation'}</div>
-          <div>◐ PTO</div>
+          <div>◑ Work Location</div>
           <div>▸ Actions</div>
+        </div>
+        
+        <div className="location-help">
+          <small>▸ <strong>On-site:</strong> Physically working in the job's state • <strong>Remote:</strong> Working from home state</small>
         </div>
 
         {allocations.map((allocation) => (
           <div key={allocation.id} className="allocation-row">
-            <div className="job-select">
-              <select
-                value={allocation.job_id}
-                onChange={(e) => updateAllocation(allocation.id, 'job_id', e.target.value)}
-                disabled={allocation.is_pto}
-              >
-                <option value="">Select Job</option>
-                {jobs.map((job) => (
-                  <option key={job.id} value={job.id}>
-                    {job.erp_job_id} - {job.name}
-                  </option>
-                ))}
-              </select>
+            {/* Job Type Column */}
+            <div className="job-type-toggle">
+              <div className="type-toggle">
+                <button 
+                  className={`toggle-btn ${allocation.job_type === 'job' ? 'active' : ''}`}
+                  onClick={() => updateAllocation(allocation.id, 'job_type', 'job')}
+                  type="button"
+                >
+                  Job
+                </button>
+                <button 
+                  className={`toggle-btn ${allocation.job_type === 'mechanic' ? 'active' : ''}`}
+                  onClick={() => updateAllocation(allocation.id, 'job_type', 'mechanic')}
+                  type="button"
+                >
+                  Mechanic
+                </button>
+              </div>
             </div>
 
-            <div className="phase-select">
-              <select
-                value={allocation.phase_id}
-                onChange={(e) => updateAllocation(allocation.id, 'phase_id', e.target.value)}
-                disabled={allocation.is_pto || !allocation.job_id}
-              >
-                <option value="">Select Phase</option>
-                {allocation.job_id && phases[allocation.job_id] && 
-                  phases[allocation.job_id].map((phase) => (
-                    <option key={phase.id} value={phase.id}>
-                      {phase.code} - {phase.name}
+            {/* Job/Equipment Column */}
+            <div className="job-equipment-select">
+              {allocation.job_type === 'job' ? (
+                <select
+                  value={allocation.job_id}
+                  onChange={(e) => updateAllocation(allocation.id, 'job_id', e.target.value)}
+                >
+                  <option value="">Select Job</option>
+                  {jobs.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {job.erp_job_id} - {job.name}
                     </option>
-                  ))
-                }
-              </select>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={allocation.equipment_id}
+                  onChange={(e) => updateAllocation(allocation.id, 'equipment_id', e.target.value)}
+                >
+                  <option value="">Select Equipment</option>
+                  {equipment.map((equip) => (
+                    <option key={equip.id} value={equip.id}>
+                      {equip.equipment_id} - {equip.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Phase/Cost Code Column */}
+            <div className="phase-costcode-select">
+              {allocation.job_type === 'job' ? (
+                <select
+                  value={allocation.phase_id}
+                  onChange={(e) => updateAllocation(allocation.id, 'phase_id', e.target.value)}
+                  disabled={!allocation.job_id}
+                >
+                  <option value="">Select Phase</option>
+                  {allocation.job_id && phases[allocation.job_id] && 
+                    phases[allocation.job_id].map((phase) => (
+                      <option key={phase.id} value={phase.id}>
+                        {phase.code} - {phase.name}
+                      </option>
+                    ))
+                  }
+                </select>
+              ) : (
+                <select
+                  value={allocation.cost_code_id}
+                  onChange={(e) => updateAllocation(allocation.id, 'cost_code_id', e.target.value)}
+                >
+                  <option value="">Select Cost Code</option>
+                  {costCodes.map((code) => (
+                    <option key={code.id} value={code.id}>
+                      {code.code} - {code.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="percentage-input">
@@ -598,13 +724,32 @@ const AllocationForm: React.FC = () => {
               <span>{inputMode === 'hours' ? 'hrs' : '%'}</span>
             </div>
 
-            <div className="pto-checkbox">
-              <input
-                type="checkbox"
-                checked={allocation.is_pto}
-                onChange={(e) => updateAllocation(allocation.id, 'is_pto', e.target.checked)}
-              />
-              <label>PTO</label>
+            <div className="work-location">
+              {(() => {
+                if (allocation.job_type === 'mechanic') {
+                  return <span className="location-local">Shop</span>;
+                }
+                
+                const selectedJob = jobs.find(j => j.id.toString() === allocation.job_id);
+                if (!selectedJob) {
+                  return <span className="location-placeholder">Select job first</span>;
+                }
+                
+                if (!selectedJob.is_out_of_state) {
+                  return <span className="location-local">Local</span>;
+                }
+                
+                return (
+                  <select
+                    value={allocation.work_location}
+                    onChange={(e) => updateAllocation(allocation.id, 'work_location', e.target.value)}
+                    className="location-select"
+                  >
+                    <option value="onsite">On-site in {selectedJob.job_state}</option>
+                    <option value="remote">Remote from {selectedJob.home_state}</option>
+                  </select>
+                );
+              })()}
             </div>
 
             <div className="actions">

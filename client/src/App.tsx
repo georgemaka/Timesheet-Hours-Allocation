@@ -6,7 +6,7 @@ function App() {
   return (
     <div className="App">
       <header className="app-header">
-        <h1>Sukut Construction - Job Allocation</h1>
+        <h1>Sukut Construction</h1>
         <p>Weekly Time Allocation</p>
       </header>
       <main>

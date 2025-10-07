@@ -2,6 +2,21 @@
 
 All notable changes to the Job Allocation Web App will be documented in this file.
 
+## [1.1.0] - 2025-08-27 - Enhanced Tax Compliance
+
+### 🌍 Mixed Location Support
+- **Enhanced Out-of-State Tracking**: Added "Mixed - Some on-site, some remote" work location option
+  - Addresses multi-state complexity where employees work both on-site and remote during same week
+  - Provides clearer tax compliance tracking for payroll processing
+  - Maintains existing TypeScript type safety with updated interfaces
+
+### 🏢 Business Logic Improvements  
+- **Payroll Tax Alerts**: Foundation laid for future admin dashboard with tax exception reporting
+- **Multi-State Workforce**: Better handling of complex work location scenarios for construction industry
+- **Compliance Ready**: Enhanced data capture for state tax requirements across different job locations
+
+---
+
 ## [1.0.0] - 2025-08-26 - Initial Release
 
 ### 🎯 Core Application
